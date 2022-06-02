@@ -4,7 +4,9 @@ class EnvSpec(object):
 
     def __init__(
             self,
+            observation_space,
             observation_im_space,
+            observation_scan_space,
             action_space,
             action_selection_space,
             observation_vec_spec,
@@ -13,12 +15,15 @@ class EnvSpec(object):
             goal_spec):
         """
         :type observation_im_space: Space
+        :type observation_scan_space: Space
         :type action_space: Space
         :type observation_vec_spec: dictionary of Space
         :type action_spec: dictionary of Space
         :type goal_spec: dictionary of Space
         """
         self._observation_im_space = observation_im_space
+        self._observation_scan_space = observation_scan_space
+        self._observation_space = observation_scan_space  # change if needed
         self._action_space = action_space
         self._action_selection_space = action_selection_space
         self._observation_vec_spec = observation_vec_spec
@@ -29,6 +34,10 @@ class EnvSpec(object):
     @property
     def observation_im_space(self):
         return self._observation_im_space
+
+    @property
+    def observation_scan_space(self):
+        return self._observation_scan_space
 
     @property
     def action_space(self):

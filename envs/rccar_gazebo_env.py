@@ -5,7 +5,7 @@ from PIL import Image
 from io import BytesIO
 
 from gym import Env
-from env_spec import EnvSpec
+from envs.env_spec import EnvSpec
 # from gcg.envs.env_spec import EnvSpec
 from gym.spaces.box import Box
 from gym.spaces.discrete import Discrete
@@ -95,6 +95,7 @@ class RccarGazeboEnv(Env):
         # params.setdefault('ros_namespace', '/rccar/')
         params.setdefault('ros_namespace', '')
         params.setdefault('obs_shape', (36, 64, 1))
+        params.setdefault('obs_scan_shape', (1081,))
         params.setdefault('steer_limits', [-0.9, 0.9])
         params.setdefault('speed_limits', [0.6, 0.6])
         params.setdefault('backup_motor', -0.4)
@@ -103,9 +104,10 @@ class RccarGazeboEnv(Env):
         params.setdefault('press_enter_on_reset', False)
         params.setdefault('collision_reward', -1.0)
         params.setdefault('collision_reward_only', True)
-        
+
         self._use_vel = True
         self._obs_shape = params['obs_shape']
+        self._obs_scan_shape = params['obs_scan_shape']
         self._steer_limits = params['steer_limits']
         self._speed_limits = params['speed_limits']
         self._fixed_speed = (self._speed_limits[0] == self._speed_limits[1] and self._use_vel)
@@ -119,6 +121,8 @@ class RccarGazeboEnv(Env):
         assert (self.observation_im_space.shape[-1] == 1 or self.observation_im_space.shape[-1] == 3)
         self.spec = EnvSpec(
             observation_im_space=self.observation_im_space,
+            observation_scan_space=self.observation_scan_space,
+            observation_space=self.observation_scan_space,
             action_space=self.action_space,
             action_selection_space=self.action_selection_space,
             observation_vec_spec=self.observation_vec_spec,
@@ -171,6 +175,8 @@ class RccarGazeboEnv(Env):
 
     def _setup_observation_spec(self):
         self.observation_im_space = Box(low=0, high=255, shape=self._obs_shape)
+        self.observation_scan_space = Box(low=0, high=20, shape=self._obs_scan_shape)
+        self.observation_space = self.observation_scan_space
 
         self.observation_vec_spec = OrderedDict()
         self.observation_vec_spec['coll'] = Discrete(1)
@@ -189,7 +195,6 @@ class RccarGazeboEnv(Env):
 
     def _setup_ros(self, params):
         rospy.init_node('RccarGazeboEnv', anonymous=True)
-        rospy.sleep(1)
 
         self._ros_namespace = params['ros_namespace']
         self._ros_topics_and_types = self._setup_get_ros_topics_and_types()
@@ -197,6 +202,9 @@ class RccarGazeboEnv(Env):
         self._ros_msg_times = dict()
         for topic, type in self._ros_topics_and_types.items():
             rospy.Subscriber(self._ros_namespace + topic, type, self.ros_msg_update, (topic,))
+
+        rospy.sleep(1)
+
         self._setup_ros_publishers()
 
         self._ros_rolloutbag = RolloutRosbag()
@@ -225,7 +233,8 @@ class RccarGazeboEnv(Env):
         # ])
 
         return dict([
-            ('/camera/zed/rgb/image_rect_color/compressed', sensor_msgs.msg.CompressedImage),
+            # ('/camera/zed/rgb/image_rect_color/compressed', sensor_msgs.msg.CompressedImage),
+            ('/scan', sensor_msgs.msg.LaserScan),
             ('/vesc/low_level/ackermann_cmd_mux/output', ackermann_msgs.msg.AckermannDriveStamped),
             ('/vesc/ackermann_cmd_mux/input/teleop', ackermann_msgs.msg.AckermannDriveStamped),
             ('/collision', std_msgs.msg.Int32)
@@ -247,11 +256,13 @@ class RccarGazeboEnv(Env):
     ############
 
     def _get_observation(self):
-        msg = self._ros_msgs['/camera/zed/rgb/image_rect_color/compressed']
+        msg = self._ros_msgs['/scan']
+        scan = np.array(msg.ranges)
 
-        recon_pil_jpg = BytesIO(msg.data)
-        recon_pil_arr = Image.open(recon_pil_jpg)
-        im = np.array(recon_pil_arr)  # don't need to resize, replay pool takes care of that
+        # msg = self._ros_msgs['/camera/zed/rgb/image_rect_color/compressed']
+        # recon_pil_jpg = BytesIO(msg.data)
+        # recon_pil_arr = Image.open(recon_pil_jpg)
+        # im = np.array(recon_pil_arr)  # don't need to resize, replay pool takes care of that
 
         vec_keys = list(self.observation_vec_spec.keys())
         vec = np.zeros(len(vec_keys), dtype=np.float32)
@@ -263,7 +274,7 @@ class RccarGazeboEnv(Env):
         vec[vec_keys.index('steer')] = self._ros_msgs['/vesc/low_level/ackermann_cmd_mux/output'].drive.steering_angle
         vec[vec_keys.index('motor')] = self._ros_msgs['/vesc/low_level/ackermann_cmd_mux/output'].drive.acceleration
 
-        return im, vec
+        return scan, vec
 
     def _get_goal(self):
         return np.array([], dtype=np.float32)
@@ -381,7 +392,8 @@ class RccarGazeboEnv(Env):
                 self._t = 0
                 self._ros_rolloutbag.close()
 
-        return next_observation, goal, reward, done, env_info
+        # return next_observation, goal, reward, done, env_info  # change if need goal
+        return next_observation[0], reward, done, env_info
 
     #############
     ### Reset ###
@@ -390,7 +402,8 @@ class RccarGazeboEnv(Env):
     def reset(self, offline=False, keep_rosbag=False):
         if offline:
             self._is_collision = False
-            return self._get_observation(), self._get_goal()
+            # return self._get_observation(), self._get_goal()
+            return self._get_observation()[0]
 
         assert (self.ros_is_good())
 
@@ -425,7 +438,8 @@ class RccarGazeboEnv(Env):
 
         assert (self.ros_is_good())
 
-        return self._get_observation(), self._get_goal()
+        # return self._get_observation(), self._get_goal()
+        return self._get_observation()[0]
 
     def _reset_goal(self):
         pass
@@ -494,7 +508,7 @@ class RccarGazeboEnv(Env):
         #     if print:
         #         logging.warn('Encoder error')
         #     return False
-        
+
         return True
 
     def get_mode(self):
@@ -539,5 +553,3 @@ if __name__ == '__main__':
     logging.basicConfig(filename='example.log', level=logging.DEBUG)
     env = RccarGazeboEnv(params={'collision_reward': -1})
     test_collision(env)
-    # test_reset(env)
-    import IPython; IPython.embed()

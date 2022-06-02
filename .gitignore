@@ -3,3 +3,4 @@
 *.pt
 *.pkl
 data/*
+rosbags/*
