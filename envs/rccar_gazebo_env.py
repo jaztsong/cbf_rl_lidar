@@ -85,7 +85,7 @@ class RolloutRosbag:
         except:
             pass
 
-        os.remove(os.path.join(self._rosbag_dir, bag_fname))
+        os.remove(bag_fname)
 
 
 class RccarGazeboEnv(Env):
@@ -258,6 +258,7 @@ class RccarGazeboEnv(Env):
     def _get_observation(self):
         msg = self._ros_msgs['/scan']
         scan = np.array(msg.ranges)
+        scan[scan == np.inf] = 10.0
 
         # msg = self._ros_msgs['/camera/zed/rgb/image_rect_color/compressed']
         # recon_pil_jpg = BytesIO(msg.data)
@@ -367,8 +368,8 @@ class RccarGazeboEnv(Env):
         action = np.asarray(action)
         if not (np.logical_and(action >= self.action_space.low, action <= self.action_space.high).all()):
             logging.warn('Action {0} will be clipped to be within bounds: {1}, {2}'.format(action,
-                                                                                          self.action_space.low,
-                                                                                          self.action_space.high))
+                                                                                           self.action_space.low,
+                                                                                           self.action_space.high))
             action = np.clip(action, self.action_space.low, self.action_space.high)
 
         self._set_action(action)

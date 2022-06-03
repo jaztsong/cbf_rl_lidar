@@ -101,7 +101,7 @@ class SAC:
         with torch.no_grad():
             # Calculate logprob
             output = self.act_net_base(next_obs)
-            mu = self.act_lim*torch.tanh(self.act_net_mu(output))
+            mu = self.act_lim * torch.tanh(self.act_net_mu(output))
             log_std = self.act_net_log_std(output).clamp(-20, 2)
             std = torch.exp(log_std)
             dist = Normal(mu, std)

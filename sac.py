@@ -43,18 +43,17 @@ class ReplayBuffer:
         return {k: torch.as_tensor(v, dtype=torch.float32) for k, v in batch.items()}
 
 
-def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
+def sac(env, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         steps_per_epoch=10000, epochs=100, replay_size=int(1e6), gamma=0.99,
         polyak=0.995, lr=1e-3, alpha=0.2, batch_size=64, start_steps=1000,
-        update_after=1000, update_every=50, num_test_episodes=10, max_ep_len=1000,
+        update_after=1000, update_every=50, num_test_episodes=1, max_ep_len=1000,
         logger_kwargs=dict(), save_freq=1):
     """
     Soft Actor-Critic (SAC)
 
 
     Args:
-        env_fn : A function which creates a copy of the environment.
-            The environment must satisfy the OpenAI Gym API.
+        env :  the environment.
 
         actor_critic: The constructor method for a PyTorch Module with an ``act`` 
             method, a ``pi`` module, a ``q1`` module, and a ``q2`` module.
@@ -150,8 +149,13 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     torch.manual_seed(seed)
     np.random.seed(seed)
 
-    env, test_env = env_fn(), env_fn()
-    obs_dim = env.observation_scan_space.shape
+    # env, test_env = env_fn(), env_fn()
+    test_env = env
+
+    max_ep_len = min(max_ep_len, steps_per_epoch)
+    update_after = min(update_after, steps_per_epoch - 1)
+
+    obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape[0]
 
     # Action limit for clamping: critically, assumes all dimensions share the same bound!
@@ -325,7 +329,7 @@ def sac(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 update(data=batch)
 
         # End of epoch handling
-        if (t + 1) % steps_per_epoch == 0:
+        if (t + 1) % steps_per_epoch == 0 and 'Q1Vals' in logger.epoch_dict:
             epoch = (t + 1) // steps_per_epoch
 
             # Save model
@@ -369,8 +373,9 @@ if __name__ == '__main__':
 
     torch.set_num_threads(torch.get_num_threads())
 
-    sac(lambda: RccarGazeboEnv(),
-        actor_critic=core.MLPActorCritic,
+    # env = gym.make("Pendulum-v0")
+    env = RccarGazeboEnv()
+    sac(env, actor_critic=core.MLPActorCritic,
         ac_kwargs=dict(hidden_sizes=[args.hid] * args.l),
         gamma=args.gamma,
         seed=args.seed,
