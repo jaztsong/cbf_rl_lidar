@@ -8,10 +8,8 @@ class EnvSpec(object):
             observation_im_space,
             observation_scan_space,
             action_space,
-            action_selection_space,
             observation_vec_spec,
             action_spec,
-            action_selection_spec,
             goal_spec):
         """
         :type observation_im_space: Space
@@ -25,10 +23,8 @@ class EnvSpec(object):
         self._observation_scan_space = observation_scan_space
         self._observation_space = observation_scan_space  # change if needed
         self._action_space = action_space
-        self._action_selection_space = action_selection_space
         self._observation_vec_spec = observation_vec_spec
         self._action_spec = action_spec
-        self._action_selection_spec = action_selection_spec
         self._goal_spec = goal_spec
 
     @property

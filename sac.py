@@ -45,8 +45,8 @@ class ReplayBuffer:
 
 def sac(env, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         steps_per_epoch=10000, epochs=100, replay_size=int(1e6), gamma=0.99,
-        polyak=0.995, lr=1e-3, alpha=0.2, batch_size=64, start_steps=1000,
-        update_after=1000, update_every=50, num_test_episodes=1, max_ep_len=1000,
+        polyak=0.995, lr=1e-3, alpha=0.2, batch_size=64, start_steps=10,
+        update_after=20, update_every=50, num_test_episodes=1, max_ep_len=1000,
         logger_kwargs=dict(), save_freq=1):
     """
     Soft Actor-Critic (SAC)
@@ -55,23 +55,23 @@ def sac(env, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     Args:
         env :  the environment.
 
-        actor_critic: The constructor method for a PyTorch Module with an ``act`` 
+        actor_critic: The constructor method for a PyTorch Module with an ``act``
             method, a ``pi`` module, a ``q1`` module, and a ``q2`` module.
-            The ``act`` method and ``pi`` module should accept batches of 
-            observations as inputs, and ``q1`` and ``q2`` should accept a batch 
-            of observations and a batch of actions as inputs. When called, 
+            The ``act`` method and ``pi`` module should accept batches of
+            observations as inputs, and ``q1`` and ``q2`` should accept a batch
+            of observations and a batch of actions as inputs. When called,
             ``act``, ``q1``, and ``q2`` should return:
 
             ===========  ================  ======================================
             Call         Output Shape      Description
             ===========  ================  ======================================
-            ``act``      (batch, act_dim)  | Numpy array of actions for each 
+            ``act``      (batch, act_dim)  | Numpy array of actions for each
                                            | observation.
             ``q1``       (batch,)          | Tensor containing one current estimate
                                            | of Q* for the provided observations
                                            | and actions. (Critical: make sure to
                                            | flatten this!)
-            ``q2``       (batch,)          | Tensor containing the other current 
+            ``q2``       (batch,)          | Tensor containing the other current
                                            | estimate of Q* for the provided observations
                                            | and actions. (Critical: make sure to
                                            | flatten this!)
@@ -89,12 +89,12 @@ def sac(env, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                                            | should be able to flow back into ``a``.
             ===========  ================  ======================================
 
-        ac_kwargs (dict): Any kwargs appropriate for the ActorCritic object 
+        ac_kwargs (dict): Any kwargs appropriate for the ActorCritic object
             you provided to SAC.
 
         seed (int): Seed for random number generators.
 
-        steps_per_epoch (int): Number of steps of interaction (state-action pairs) 
+        steps_per_epoch (int): Number of steps of interaction (state-action pairs)
             for the agent and the environment in each epoch.
 
         epochs (int): Number of epochs to run and train agent.
@@ -103,19 +103,19 @@ def sac(env, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
         gamma (float): Discount factor. (Always between 0 and 1.)
 
-        polyak (float): Interpolation factor in polyak averaging for target 
-            networks. Target networks are updated towards main networks 
+        polyak (float): Interpolation factor in polyak averaging for target
+            networks. Target networks are updated towards main networks
             according to:
 
-            .. math:: \\theta_{\\text{targ}} \\leftarrow 
+            .. math:: \\theta_{\\text{targ}} \\leftarrow
                 \\rho \\theta_{\\text{targ}} + (1-\\rho) \\theta
 
-            where :math:`\\rho` is polyak. (Always between 0 and 1, usually 
+            where :math:`\\rho` is polyak. (Always between 0 and 1, usually
             close to 1.)
 
         lr (float): Learning rate (used for both policy and value learning).
 
-        alpha (float): Entropy regularization coefficient. (Equivalent to 
+        alpha (float): Entropy regularization coefficient. (Equivalent to
             inverse of reward scale in the original SAC paper.)
 
         batch_size (int): Minibatch size for SGD.
@@ -128,8 +128,8 @@ def sac(env, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
             is full enough for useful updates.
 
         update_every (int): Number of env interactions that should elapse
-            between gradient descent updates. Note: Regardless of how long 
-            you wait between updates, the ratio of env steps to gradient steps 
+            between gradient descent updates. Note: Regardless of how long
+            you wait between updates, the ratio of env steps to gradient steps
             is locked to 1.
 
         num_test_episodes (int): Number of episodes to test the deterministic
@@ -152,14 +152,8 @@ def sac(env, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # env, test_env = env_fn(), env_fn()
     test_env = env
 
-    max_ep_len = min(max_ep_len, steps_per_epoch)
-    update_after = min(update_after, steps_per_epoch - 1)
-
     obs_dim = env.observation_space.shape
     act_dim = env.action_space.shape[0]
-
-    # Action limit for clamping: critically, assumes all dimensions share the same bound!
-    act_limit = env.action_space.high[0]
 
     # Create actor-critic module and target networks
     ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
@@ -329,7 +323,8 @@ def sac(env, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 update(data=batch)
 
         # End of epoch handling
-        if (t + 1) % steps_per_epoch == 0 and 'Q1Vals' in logger.epoch_dict:
+        if (t + 1) % steps_per_epoch == 0 and \
+                all(key in logger.epoch_dict for key in ("EpRet", "Q1Vals")):
             epoch = (t + 1) // steps_per_epoch
 
             # Save model
@@ -374,7 +369,9 @@ if __name__ == '__main__':
     torch.set_num_threads(torch.get_num_threads())
 
     # env = gym.make("Pendulum-v0")
-    env = RccarGazeboEnv()
+    env = RccarGazeboEnv({
+        "collision_reward": -100
+    })
     sac(env, actor_critic=core.MLPActorCritic,
         ac_kwargs=dict(hidden_sizes=[args.hid] * args.l),
         gamma=args.gamma,

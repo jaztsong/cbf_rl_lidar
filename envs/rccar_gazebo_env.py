@@ -1,4 +1,5 @@
 import os
+import sys
 from collections import OrderedDict
 import numpy as np
 from PIL import Image
@@ -11,8 +12,8 @@ from gym.spaces.box import Box
 from gym.spaces.discrete import Discrete
 # from gcg.envs.spaces.box import Box
 # from gcg.envs.spaces.discrete import Discrete
-import logging
 # from gcg.data.logger import logger
+import logging
 
 try:
     import rospy
@@ -33,7 +34,7 @@ class RolloutRosbag:
 
     @property
     def _rosbag_dir(self):
-        dir = os.path.join("./", 'rosbags')
+        dir = os.path.join("./data/", 'rosbags')
         if not os.path.exists(dir):
             os.mkdir(dir)
         return dir
@@ -62,7 +63,7 @@ class RolloutRosbag:
             if stamp > self._last_write:
                 self._rosbag.write(topic, msg)
         else:
-            logging.warn('Topic {0} not received'.format(topic))
+            logging.warning('Topic {0} not received'.format(topic))
 
     def write_all(self, topics, msg_dict, stamp_dict):
         for topic in topics:
@@ -90,20 +91,22 @@ class RolloutRosbag:
 
 class RccarGazeboEnv(Env):
     def __init__(self, params={}):
+
         params.setdefault('dt', 0.25)
         params.setdefault('horizon', int(5. * 60. / params['dt']))  # 5 minutes worth
         # params.setdefault('ros_namespace', '/rccar/')
         params.setdefault('ros_namespace', '')
+        params.setdefault('rosbag_enabled', False)
         params.setdefault('obs_shape', (36, 64, 1))
         params.setdefault('obs_scan_shape', (1081,))
         params.setdefault('steer_limits', [-0.9, 0.9])
-        params.setdefault('speed_limits', [0.6, 0.6])
+        params.setdefault('speed_limits', [0, 1])
         params.setdefault('backup_motor', -0.4)
         params.setdefault('backup_duration', 3.6)
         params.setdefault('backup_steer_range', (-0.8, 0.8))
         params.setdefault('press_enter_on_reset', False)
         params.setdefault('collision_reward', -1.0)
-        params.setdefault('collision_reward_only', True)
+        params.setdefault('collision_reward_only', False)
 
         self._use_vel = True
         self._obs_shape = params['obs_shape']
@@ -117,6 +120,7 @@ class RccarGazeboEnv(Env):
         self._dt = params['dt']
         self._horizon = params['horizon']
 
+        self._set_logger()
         self._setup_spec()
         assert (self.observation_im_space.shape[-1] == 1 or self.observation_im_space.shape[-1] == 3)
         self.spec = EnvSpec(
@@ -124,10 +128,8 @@ class RccarGazeboEnv(Env):
             observation_scan_space=self.observation_scan_space,
             observation_space=self.observation_scan_space,
             action_space=self.action_space,
-            action_selection_space=self.action_selection_space,
             observation_vec_spec=self.observation_vec_spec,
             action_spec=self.action_spec,
-            action_selection_spec=self.action_selection_spec,
             goal_spec=self.goal_spec)
 
         self._last_step_time = None
@@ -137,7 +139,7 @@ class RccarGazeboEnv(Env):
         self._backup_steer_range = params['backup_steer_range']
         self._press_enter_on_reset = params['press_enter_on_reset']
 
-        ### ROS
+        # ROS
         if not ROS_IMPORTED:
             logging.error('ROS not imported')
             exit(1)
@@ -145,9 +147,15 @@ class RccarGazeboEnv(Env):
         self._setup_ros(params)
         self._t = 0
 
-    ##################
-    ### Setup spec ###
-    ##################
+    def _set_logger(self):
+
+        logging.basicConfig(level=logging.DEBUG,
+                            format='%(asctime)s %(name)-10s %(levelname)-8s %(message)s',
+                            datefmt='%m-%d %H:%M:%S',
+                            style='%')
+    ##############
+    # Setup spec #
+    ##############
 
     def _setup_spec(self):
         self._setup_action_spec()
@@ -156,42 +164,39 @@ class RccarGazeboEnv(Env):
 
     def _setup_action_spec(self):
         self.action_spec = OrderedDict()
-        self.action_selection_spec = OrderedDict()
 
-        self.action_spec['steer'] = Box(low=np.array([-1.]), high=np.array([1.]))
-        self.action_spec['speed'] = Box(low=np.array([-0.7]), high=np.array([0.7]))
-        self.action_space = Box(low=np.array([self.action_spec['steer'].low[0], self.action_spec['speed'].low[0]]),
-                                high=np.array([self.action_spec['steer'].high[0], self.action_spec['speed'].high[0]]))
-
-        self.action_selection_spec['steer'] = Box(low=np.array([self._steer_limits[0]]), high=np.array([self._steer_limits[1]]))
-        self.action_selection_spec['speed'] = Box(low=np.array([self._speed_limits[0]]), high=np.array([self._speed_limits[1]]))
-        self.action_selection_space = Box(low=np.array([self.action_selection_spec['steer'].low[0],
-                                                        self.action_selection_spec['speed'].low[0]]),
-                                          high=np.array([self.action_selection_spec['steer'].high[0],
-                                                         self.action_selection_spec['speed'].high[0]]))
-
-        assert (np.logical_and(self.action_selection_space.low >= self.action_space.low,
-                               self.action_selection_space.high <= self.action_space.high).all())
+        self.action_spec['steer'] = Box(low=np.array(
+            [self._steer_limits[0]]), high=np.array([self._steer_limits[1]]))
+        self.action_spec['speed'] = Box(low=np.array(
+            [self._speed_limits[0]]), high=np.array([self._speed_limits[1]]))
+        self.action_space = Box(low=np.array([self.action_spec['steer'].low[0],
+                                              self.action_spec['speed'].low[0]]),
+                                high=np.array([self.action_spec['steer'].high[0],
+                                               self.action_spec['speed'].high[0]]))
 
     def _setup_observation_spec(self):
         self.observation_im_space = Box(low=0, high=255, shape=self._obs_shape)
-        self.observation_scan_space = Box(low=0, high=20, shape=self._obs_scan_shape)
+        self.observation_scan_space = Box(
+            low=0, high=20, shape=self._obs_scan_shape)
         self.observation_space = self.observation_scan_space
 
         self.observation_vec_spec = OrderedDict()
         self.observation_vec_spec['coll'] = Discrete(1)
         # self.observation_vec_spec['heading_cos'] = Box(low=-1., high=1.)
         # self.observation_vec_spec['heading_sin'] = Box(low=-1., high=1.)
-        self.observation_vec_spec['speed'] = Box(low=np.array([-0.4]), high=np.array([0.4]))
-        self.observation_vec_spec['steer'] = Box(low=np.array([-1.]), high=np.array([1.]))
-        self.observation_vec_spec['motor'] = Box(low=np.array([-1.]), high=np.array([1.]))
+        self.observation_vec_spec['speed'] = Box(
+            low=np.array([-0.4]), high=np.array([0.4]))
+        self.observation_vec_spec['steer'] = Box(
+            low=np.array([-1.]), high=np.array([1.]))
+        self.observation_vec_spec['motor'] = Box(
+            low=np.array([-1.]), high=np.array([1.]))
 
     def _setup_goal_spec(self):
         self.goal_spec = OrderedDict()
 
-    #################
-    ### Setup ROS ###
-    #################
+    #############
+    # Setup ROS #
+    #############
 
     def _setup_ros(self, params):
         rospy.init_node('RccarGazeboEnv', anonymous=True)
@@ -201,13 +206,17 @@ class RccarGazeboEnv(Env):
         self._ros_msgs = dict()
         self._ros_msg_times = dict()
         for topic, type in self._ros_topics_and_types.items():
-            rospy.Subscriber(self._ros_namespace + topic, type, self.ros_msg_update, (topic,))
+            rospy.Subscriber(self._ros_namespace + topic,
+                             type, self.ros_msg_update, (topic,))
 
         rospy.sleep(1)
 
         self._setup_ros_publishers()
 
-        self._ros_rolloutbag = RolloutRosbag()
+        self._ros_rolloutbag = None
+        if params['rosbag_enabled']:
+            # TODO: rosbag is buggy when reset/collision
+            self._ros_rolloutbag = RolloutRosbag()
 
     def _setup_get_ros_topics_and_types(self):
         # return dict([
@@ -241,7 +250,8 @@ class RccarGazeboEnv(Env):
         ])
 
     def _setup_ros_publishers(self):
-        self._ros_drive_pub = rospy.Publisher(self._ros_namespace + '/vesc/ackermann_cmd_mux/input/teleop', ackermann_msgs.msg.AckermannDriveStamped, queue_size=10)
+        self._ros_drive_pub = rospy.Publisher(self._ros_namespace + '/vesc/ackermann_cmd_mux/input/teleop',
+                                              ackermann_msgs.msg.AckermannDriveStamped, queue_size=10)
 
         # self._ros_steer_pub = rospy.Publisher(self._ros_namespace + 'cmd/steer', std_msgs.msg.Float32, queue_size=10)
         # self._ros_vel_pub = rospy.Publisher(self._ros_namespace + 'cmd/vel', std_msgs.msg.Float32, queue_size=10)
@@ -251,9 +261,9 @@ class RccarGazeboEnv(Env):
         self._ros_pid_disable_pub = rospy.Publisher(self._ros_namespace + 'pid/disable', std_msgs.msg.Empty,
                                                     queue_size=10)
 
-    ############
-    ### Gets ###
-    ############
+    ########
+    # Gets #
+    ########
 
     def _get_observation(self):
         msg = self._ros_msgs['/scan']
@@ -298,9 +308,9 @@ class RccarGazeboEnv(Env):
     def _get_done(self):
         return self._is_collision
 
-    ########################
-    ### Publish commands ###
-    ########################
+    ####################
+    # Publish commands #
+    ####################
 
     def _set_action(self, action):
         # cmd_steer, cmd_vel = action
@@ -357,20 +367,21 @@ class RccarGazeboEnv(Env):
     def horizon(self):
         return self._horizon
 
-    ############
-    ### Step ###
-    ############
+    ########
+    # Step #
+    ########
 
     def step(self, action, offline=False):
         if not offline:
             assert (self.ros_is_good())
 
         action = np.asarray(action)
-        if not (np.logical_and(action >= self.action_space.low, action <= self.action_space.high).all()):
-            logging.warn('Action {0} will be clipped to be within bounds: {1}, {2}'.format(action,
-                                                                                           self.action_space.low,
-                                                                                           self.action_space.high))
-            action = np.clip(action, self.action_space.low, self.action_space.high)
+        if not (np.logical_and(action >= self.action_space.low,
+                               action <= self.action_space.high).all()):
+            logging.warning('Action {0} will be clipped to be within bounds: {1}, {2}'
+                            .format(action, self.action_space.low, self.action_space.high))
+            action = np.clip(action, self.action_space.low,
+                             self.action_space.high)
 
         self._set_action(action)
 
@@ -387,18 +398,20 @@ class RccarGazeboEnv(Env):
         self._t += 1
 
         if not offline:
-            self._ros_rolloutbag.write_all(self._ros_topics_and_types.keys(), self._ros_msgs, self._ros_msg_times)
+            if self._ros_rolloutbag:
+                self._ros_rolloutbag.write_all(self._ros_topics_and_types.keys(), self._ros_msgs, self._ros_msg_times)
             if done:
                 logging.debug('Done after {0} steps'.format(self._t))
                 self._t = 0
-                self._ros_rolloutbag.close()
+                if self._ros_rolloutbag:
+                    self._ros_rolloutbag.close()
 
         # return next_observation, goal, reward, done, env_info  # change if need goal
         return next_observation[0], reward, done, env_info
 
-    #############
-    ### Reset ###
-    #############
+    #########
+    # Reset #
+    #########
 
     def reset(self, offline=False, keep_rosbag=False):
         if offline:
@@ -408,7 +421,7 @@ class RccarGazeboEnv(Env):
 
         assert (self.ros_is_good())
 
-        if self._ros_rolloutbag.is_open:
+        if self._ros_rolloutbag and self._ros_rolloutbag.is_open:
             if keep_rosbag:
                 self._ros_rolloutbag.close()
             else:
@@ -433,7 +446,8 @@ class RccarGazeboEnv(Env):
         self._is_collision = False
         self._t = 0
 
-        self._ros_rolloutbag.open()
+        if self._ros_rolloutbag:
+            self._ros_rolloutbag.open()
 
         self._reset_goal()
 
@@ -445,13 +459,9 @@ class RccarGazeboEnv(Env):
     def _reset_goal(self):
         pass
 
-    @property
-    def horizon(self):
-        return self._horizon
-    
-    ###########
-    ### ROS ###
-    ###########
+    #######
+    # ROS #
+    #######
 
     def ros_msg_update(self, msg, args):
         topic = args[0]
@@ -467,7 +477,8 @@ class RccarGazeboEnv(Env):
                     self._ros_msg_times[topic] = rospy.Time.now()
                 else:
                     if self._ros_msgs[topic].data != 1:
-                        # if is collision, but previous message is not collision, then this topic didn't cause a colision
+                        # if is collision, but previous message is not collision,
+                        #  then this topic didn't cause a colision
                         self._ros_msgs[topic] = msg
                         self._ros_msg_times[topic] = rospy.Time.now()
             else:
@@ -489,7 +500,8 @@ class RccarGazeboEnv(Env):
                 elapsed = (rospy.Time.now() - self._ros_msg_times[topic]).to_sec()
                 if elapsed > self._dt:
                     if print:
-                        logging.debug('Topic {0} was received {1} seconds ago (dt is {2})'.format(topic, elapsed, self._dt))
+                        logging.debug('Topic {0} was received {1} seconds ago (dt is {2})'
+                                      .format(topic, elapsed, self._dt))
                     return False
 
         # check if in python mode
@@ -499,15 +511,15 @@ class RccarGazeboEnv(Env):
         #     return False
 
         # TODO
-        #if self._ros_msgs['collision/flip'].data:
+        # if self._ros_msgs['collision/flip'].data:
         #    if print:
-        #        logging.warn('Car has flipped, please unflip it to continue')
+        #        logging.warning('Car has flipped, please unflip it to continue')
         #    self._is_collision = False # otherwise will stay flipped forever
         #    return False
 
         # if self._ros_msgs['encoder/error'].data:
         #     if print:
-        #         logging.warn('Encoder error')
+        #         logging.warning('Encoder error')
         #     return False
 
         return True
@@ -551,6 +563,5 @@ def test_collision(env):
             env.reset()
 
 if __name__ == '__main__':
-    logging.basicConfig(filename='example.log', level=logging.DEBUG)
-    env = RccarGazeboEnv(params={'collision_reward': -1})
+    env = RccarGazeboEnv(params={'collision_reward': -100})
     test_collision(env)
