@@ -14,8 +14,8 @@ def combined_shape(length, shape=None):
 
 def mlp(sizes, activation, output_activation=nn.Identity):
     layers = []
-    for j in range(len(sizes)-1):
-        act = activation if j < len(sizes)-2 else output_activation
+    for j in range(len(sizes) - 1):
+        act = activation if j < len(sizes) - 2 else output_activation
         layers += [nn.Linear(sizes[j], sizes[j+1]), act()]
     return nn.Sequential(*layers)
 
@@ -90,7 +90,7 @@ class MLPActorCritic(nn.Module):
 
         obs_dim = observation_space.shape[0]
         act_dim = action_space.shape[0]
-        act_limit = torch.FloatTensor([action_space.low, action_space.high])
+        act_limit = nn.Parameter(torch.FloatTensor([action_space.low, action_space.high]), requires_grad=False)
 
         # build policy and value functions
         self.pi = SquashedGaussianMLPActor(
@@ -101,4 +101,26 @@ class MLPActorCritic(nn.Module):
     def act(self, obs, deterministic=False):
         with torch.no_grad():
             a, _ = self.pi(obs, deterministic, False)
-            return a.numpy()
+            return a.cpu().numpy()
+
+
+class NN_Dynamics(nn.Module):
+
+    def __init__(self, obs_dim, act_dim, f_hidden_sizes, g_hidden_sizes,
+                 activation=nn.ReLU):
+        super().__init__()
+        self.obs_dim = obs_dim
+        self.act_dim = act_dim
+        self.f = mlp([obs_dim] + list(f_hidden_sizes) + [obs_dim], activation)
+        self.g = mlp([obs_dim] + list(g_hidden_sizes) + [obs_dim * act_dim], activation)
+
+    def forward(self, obs, act):
+        f = self.f(obs)
+        g = self.g(obs).reshape((-1, self.obs_dim, self.act_dim))
+        return obs + f + (g @ act[:, :, None]).squeeze()
+
+    def get_dynamics(self, obs, device):
+        obs = torch.tensor(obs, dtype=torch.float32, device=device)
+        f = self.f(obs) + obs
+        g = self.g(obs).reshape((-1, self.obs_dim, self.act_dim))
+        return f.detach().cpu().numpy(), g.squeeze().detach().cpu().numpy()

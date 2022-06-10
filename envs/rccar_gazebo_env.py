@@ -268,7 +268,7 @@ class RccarGazeboEnv(Env):
     def _get_observation(self):
         msg = self._ros_msgs['/scan']
         scan = np.array(msg.ranges)
-        scan[scan == np.inf] = 10.0
+        scan = 1.0 / scan
 
         # msg = self._ros_msgs['/camera/zed/rgb/image_rect_color/compressed']
         # recon_pil_jpg = BytesIO(msg.data)
@@ -281,7 +281,7 @@ class RccarGazeboEnv(Env):
         vec[vec_keys.index('coll')] = self._is_collision
         # vec[vec_keys.index('heading_cos')] = np.cos(self._ros_msgs['orientation/rpy'].z)
         # vec[vec_keys.index('heading_sin')] = np.sin(self._ros_msgs['orientation/rpy'].z)
-        vec[vec_keys.index('speed')] = self._get_speed()
+        vec[vec_keys.index('speed')] = self._ros_msgs['/vesc/low_level/ackermann_cmd_mux/output'].drive.speed
         vec[vec_keys.index('steer')] = self._ros_msgs['/vesc/low_level/ackermann_cmd_mux/output'].drive.steering_angle
         vec[vec_keys.index('motor')] = self._ros_msgs['/vesc/low_level/ackermann_cmd_mux/output'].drive.acceleration
 
@@ -293,6 +293,8 @@ class RccarGazeboEnv(Env):
     def _get_speed(self):
         return self._ros_msgs['/vesc/low_level/ackermann_cmd_mux/output'].drive.speed
 
+    def _get_steer(self):
+        return self._ros_msgs['/vesc/low_level/ackermann_cmd_mux/output'].drive.steering_angle
         # return self._ros_msgs['encoder/both'].data
 
     def _get_reward(self):

@@ -9,6 +9,8 @@ import networks as core
 from utils.logx import EpochLogger
 from tqdm.std import tqdm
 from envs.rccar_gazebo_env import RccarGazeboEnv
+from matplotlib import pyplot as plt
+import cbf
 
 
 class ReplayBuffer:
@@ -33,116 +35,33 @@ class ReplayBuffer:
         self.ptr = (self.ptr + 1) % self.max_size
         self.size = min(self.size + 1, self.max_size)
 
-    def sample_batch(self, batch_size=32):
+    def sample_batch(self, batch_size=32, device='cpu'):
         idxs = np.random.randint(0, self.size, size=batch_size)
         batch = dict(obs=self.obs_buf[idxs],
                      obs2=self.obs2_buf[idxs],
                      act=self.act_buf[idxs],
                      rew=self.rew_buf[idxs],
                      done=self.done_buf[idxs])
-        return {k: torch.as_tensor(v, dtype=torch.float32) for k, v in batch.items()}
+        return {k: torch.as_tensor(v, dtype=torch.float32, device=device) for k, v in batch.items()}
 
+    def sample_all(self, device='cpu'):
+        batch = dict(obs=self.obs_buf,
+                     obs2=self.obs2_buf[:],
+                     act=self.act_buf[:],
+                     rew=self.rew_buf[:],
+                     done=self.done_buf[:])
+        return {k: torch.as_tensor(v, dtype=torch.float32, device=device) for k, v in batch.items()}
 
-def sac(env, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
-        steps_per_epoch=10000, epochs=100, replay_size=int(1e6), gamma=0.99,
+def sac(env, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), dynamics_kwargs=dict(),
+        seed=0, steps_per_epoch=10000, epochs=100, replay_size=int(1e6), gamma=0.99,
         polyak=0.995, lr=1e-3, alpha=0.2, batch_size=64, start_steps=10,
-        update_after=20, update_every=50, num_test_episodes=1, max_ep_len=1000,
+        update_after=20, update_every=50, num_test_episodes=0, max_ep_len=1000,
         logger_kwargs=dict(), save_freq=1):
     """
-    Soft Actor-Critic (SAC)
-
-
-    Args:
-        env :  the environment.
-
-        actor_critic: The constructor method for a PyTorch Module with an ``act``
-            method, a ``pi`` module, a ``q1`` module, and a ``q2`` module.
-            The ``act`` method and ``pi`` module should accept batches of
-            observations as inputs, and ``q1`` and ``q2`` should accept a batch
-            of observations and a batch of actions as inputs. When called,
-            ``act``, ``q1``, and ``q2`` should return:
-
-            ===========  ================  ======================================
-            Call         Output Shape      Description
-            ===========  ================  ======================================
-            ``act``      (batch, act_dim)  | Numpy array of actions for each
-                                           | observation.
-            ``q1``       (batch,)          | Tensor containing one current estimate
-                                           | of Q* for the provided observations
-                                           | and actions. (Critical: make sure to
-                                           | flatten this!)
-            ``q2``       (batch,)          | Tensor containing the other current
-                                           | estimate of Q* for the provided observations
-                                           | and actions. (Critical: make sure to
-                                           | flatten this!)
-            ===========  ================  ======================================
-
-            Calling ``pi`` should return:
-
-            ===========  ================  ======================================
-            Symbol       Shape             Description
-            ===========  ================  ======================================
-            ``a``        (batch, act_dim)  | Tensor containing actions from policy
-                                           | given observations.
-            ``logp_pi``  (batch,)          | Tensor containing log probabilities of
-                                           | actions in ``a``. Importantly: gradients
-                                           | should be able to flow back into ``a``.
-            ===========  ================  ======================================
-
-        ac_kwargs (dict): Any kwargs appropriate for the ActorCritic object
-            you provided to SAC.
-
-        seed (int): Seed for random number generators.
-
-        steps_per_epoch (int): Number of steps of interaction (state-action pairs)
-            for the agent and the environment in each epoch.
-
-        epochs (int): Number of epochs to run and train agent.
-
-        replay_size (int): Maximum length of replay buffer.
-
-        gamma (float): Discount factor. (Always between 0 and 1.)
-
-        polyak (float): Interpolation factor in polyak averaging for target
-            networks. Target networks are updated towards main networks
-            according to:
-
-            .. math:: \\theta_{\\text{targ}} \\leftarrow
-                \\rho \\theta_{\\text{targ}} + (1-\\rho) \\theta
-
-            where :math:`\\rho` is polyak. (Always between 0 and 1, usually
-            close to 1.)
-
-        lr (float): Learning rate (used for both policy and value learning).
-
-        alpha (float): Entropy regularization coefficient. (Equivalent to
-            inverse of reward scale in the original SAC paper.)
-
-        batch_size (int): Minibatch size for SGD.
-
-        start_steps (int): Number of steps for uniform-random action selection,
-            before running real policy. Helps exploration.
-
-        update_after (int): Number of env interactions to collect before
-            starting to do gradient descent updates. Ensures replay buffer
-            is full enough for useful updates.
-
-        update_every (int): Number of env interactions that should elapse
-            between gradient descent updates. Note: Regardless of how long
-            you wait between updates, the ratio of env steps to gradient steps
-            is locked to 1.
-
-        num_test_episodes (int): Number of episodes to test the deterministic
-            policy at the end of each epoch.
-
-        max_ep_len (int): Maximum length of trajectory / episode / rollout.
-
-        logger_kwargs (dict): Keyword args for EpochLogger.
-
-        save_freq (int): How often (in terms of gap between epochs) to save
-            the current policy and value function.
-
+    Soft Actor-Critic (SAC) from Spinning Up
     """
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     logger = EpochLogger(**logger_kwargs)
 
@@ -152,12 +71,19 @@ def sac(env, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # env, test_env = env_fn(), env_fn()
     test_env = env
 
-    obs_dim = env.observation_space.shape
+    obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
 
     # Create actor-critic module and target networks
     ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
     ac_targ = deepcopy(ac)
+
+    # Create neural nets for fitting dyamics
+    dynamics = core.NN_Dynamics(obs_dim, act_dim, **dynamics_kwargs)
+
+    ac.to(device=device)
+    ac_targ.to(device=device)
+    dynamics.to(device=device)
 
     # Freeze target networks with respect to optimizers (only update via polyak averaging)
     for p in ac_targ.parameters():
@@ -200,8 +126,8 @@ def sac(env, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         loss_q = loss_q1 + loss_q2
 
         # Useful info for logging
-        q_info = dict(Q1Vals=q1.detach().numpy(),
-                      Q2Vals=q2.detach().numpy())
+        q_info = dict(Q1Vals=q1.detach().cpu().numpy(),
+                      Q2Vals=q2.detach().cpu().numpy())
 
         return loss_q, q_info
 
@@ -217,13 +143,14 @@ def sac(env, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         loss_pi = (alpha * logp_pi - q_pi).mean()
 
         # Useful info for logging
-        pi_info = dict(LogPi=logp_pi.detach().numpy())
+        pi_info = dict(LogPi=logp_pi.detach().cpu().numpy())
 
         return loss_pi, pi_info
 
     # Set up optimizers for policy and q-function
     pi_optimizer = Adam(ac.pi.parameters(), lr=lr)
     q_optimizer = Adam(q_params, lr=lr)
+    dynamics_optimizer = Adam(dynamics.parameters(), lr=lr)
 
     # Set up model saving
     logger.setup_pytorch_saver(ac)
@@ -265,8 +192,22 @@ def sac(env, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 p_targ.data.add_((1 - polyak) * p.data)
 
     def get_action(o, deterministic=False):
-        return ac.act(torch.as_tensor(o, dtype=torch.float32),
+        return ac.act(torch.as_tensor(o, dtype=torch.float32, device=device),
                       deterministic)
+
+    def update_dynamics(data):
+        o, a, r, o2, d = data['obs'], data['act'], data['rew'], data['obs2'], data['done']
+
+        # MSE loss
+        o2_ = dynamics(o, a)
+        loss_dynamics = ((o2_ - o2)**2).mean()
+
+        dynamics_optimizer.zero_grad()
+        loss_dynamics.backward()
+        dynamics_optimizer.step()
+
+        # Record things
+        logger.store(LossDynamics=loss_dynamics.item())
 
     def test_agent():
         for j in range(num_test_episodes):
@@ -283,6 +224,7 @@ def sac(env, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     start_time = time.time()
     o, ep_ret, ep_len = env.reset(), 0, 0
 
+    updated, finished = False, False
     # Main loop: collect experience in env and update/log each epoch
     for t in tqdm(range(total_steps)):
 
@@ -291,6 +233,9 @@ def sac(env, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         # use the learned policy.
         if t > start_steps:
             a = get_action(o)
+            if updated:
+                f, g = dynamics.get_dynamics(o, device=device)
+                a = cbf.control_barrier(o, a, f, g)
         else:
             a = env.action_space.sample()
 
@@ -315,16 +260,25 @@ def sac(env, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         if d or (ep_len == max_ep_len):
             logger.store(EpRet=ep_ret, EpLen=ep_len)
             o, ep_ret, ep_len = env.reset(), 0, 0
+            finished = True
 
         # Update handling
         if t >= update_after and t % update_every == 0:
             for j in range(update_every):
-                batch = replay_buffer.sample_batch(batch_size)
+                batch = replay_buffer.sample_batch(batch_size, device=device)
                 update(data=batch)
+                update_dynamics(data=batch)
+
+            updated = True
+
+            # test_data = replay_buffer.sample_batch(1, device=device)
+            # plt.plot(test_data['obs2'][0].cpu().numpy(), 'r-', label='ground_truth')
+            # plt.plot(dynamics(test_data['obs'], test_data['act']).detach().cpu().numpy()[0], 'g--', label='predicted')
+            # plt.legend()
+            # plt.show()
 
         # End of epoch handling
-        if (t + 1) % steps_per_epoch == 0 and \
-                all(key in logger.epoch_dict for key in ("EpRet", "Q1Vals")):
+        if (t + 1) % steps_per_epoch == 0 and updated and finished:
             epoch = (t + 1) // steps_per_epoch
 
             # Save model
@@ -332,22 +286,22 @@ def sac(env, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 logger.save_state({'env': env}, None)
 
             # Test the performance of the deterministic version of the agent.
-            test_agent()
+            # test_agent()
 
             # Log info about epoch
             logger.log_tabular('Epoch', epoch)
             logger.log_tabular('EpRet', with_min_and_max=True)
-            logger.log_tabular('TestEpRet', with_min_and_max=True)
             logger.log_tabular('EpLen', average_only=True)
-            logger.log_tabular('TestEpLen', average_only=True)
             logger.log_tabular('TotalEnvInteracts', t)
             logger.log_tabular('Q1Vals', with_min_and_max=True)
             logger.log_tabular('Q2Vals', with_min_and_max=True)
             logger.log_tabular('LogPi', with_min_and_max=True)
             logger.log_tabular('LossPi', average_only=True)
             logger.log_tabular('LossQ', average_only=True)
+            logger.log_tabular('LossDynamics', average_only=True)
             logger.log_tabular('Time', time.time() - start_time)
             logger.dump_tabular()
+            updated, finished = False, False
 
 
 if __name__ == '__main__':
@@ -358,9 +312,9 @@ if __name__ == '__main__':
     parser.add_argument('--l', type=int, default=2)
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--seed', '-s', type=int, default=0)
-    parser.add_argument('--steps-per-epoch', type=int, default=100)
+    parser.add_argument('--steps-per-epoch', type=int, default=200)
     parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--exp_name', type=str, default='sac')
+    parser.add_argument('--exp_name', type=str, default='no_cbf')
     args = parser.parse_args()
 
     from utils.logx import setup_logger_kwargs
@@ -374,6 +328,7 @@ if __name__ == '__main__':
     })
     sac(env, actor_critic=core.MLPActorCritic,
         ac_kwargs=dict(hidden_sizes=[args.hid] * args.l),
+        dynamics_kwargs=dict(f_hidden_sizes=[256, 256], g_hidden_sizes=[256, 256]),
         gamma=args.gamma,
         seed=args.seed,
         steps_per_epoch=args.steps_per_epoch,
