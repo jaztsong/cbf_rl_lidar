@@ -100,7 +100,7 @@ class RccarGazeboEnv(Env):
         params.setdefault('obs_shape', (36, 64, 1))
         params.setdefault('obs_scan_shape', (1081,))
         params.setdefault('steer_limits', [-0.9, 0.9])
-        params.setdefault('speed_limits', [0, 1])
+        params.setdefault('speed_limits', [0, 2])
         params.setdefault('backup_motor', -0.4)
         params.setdefault('backup_duration', 3.6)
         params.setdefault('backup_steer_range', (-0.8, 0.8))
@@ -298,17 +298,18 @@ class RccarGazeboEnv(Env):
         # return self._ros_msgs['encoder/both'].data
 
     def _get_reward(self):
-        if self._is_collision:
-            reward = self._collision_reward
+        if self._collision_reward_only:
+            reward = 0
         else:
-            if self._collision_reward_only:
-                reward = 0
-            else:
-                reward = self._get_speed()
+            reward = self._get_speed()
+
         return reward
 
     def _get_done(self):
         return self._is_collision
+
+    def _get_cost(self):
+        return self._collision_reward if self._is_collision else 0
 
     ####################
     # Publish commands #
@@ -395,7 +396,7 @@ class RccarGazeboEnv(Env):
         goal = self._get_goal()
         reward = self._get_reward()
         done = self._get_done()
-        env_info = dict()
+        env_info = dict(cost=self._get_cost())
 
         self._t += 1
 
@@ -440,7 +441,11 @@ class RccarGazeboEnv(Env):
             else:
                 logging.debug('Resetting (no collision)')
 
-            self._do_backup()
+            from std_srvs.srv import Empty
+            rospy.wait_for_service('/gazebo/reset_world')
+            reset_world = rospy.ServiceProxy('/gazebo/reset_world', Empty)
+            reset_world()
+            # self._do_backup()
 
         rospy.sleep(0.5)
 
