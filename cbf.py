@@ -18,9 +18,9 @@ class CBF(nn.Module):
 
     def control_barrier(self, obs, u_rl, f, g):
         # objective function, same for all CBF-QP
-        P = np.diag([0.1, 1.0])
+        P = np.diag([0.2, 1.0])
         q = -u_rl.astype(np.double) @ P
-        lb = np.array([-0.9, 0])
+        lb = np.array([-0.9, 0.0])
         ub = np.array([0.9, 2])
 
         P_h = self.P.detach().cpu().numpy().astype(np.double)

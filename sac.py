@@ -59,7 +59,10 @@ class ReplayBuffer:
             cbf=self.cbf_buf[idxs],
             done=self.done_buf[idxs],
         )
-        return {k: torch.as_tensor(v, dtype=torch.float32, device=device) for k, v in batch.items()}
+        return {
+            k: torch.as_tensor(v, dtype=torch.float32, device=device)
+            for k, v in batch.items()
+        }
 
     def sample_latest(self, size=1e3, device="cpu"):
         idxs = range(int(max(self.ptr - size, 0)), self.ptr)
@@ -72,12 +75,15 @@ class ReplayBuffer:
             cbf=self.cbf_buf[idxs],
             done=self.done_buf[idxs],
         )
-        return {k: torch.as_tensor(v, dtype=torch.float32, device=device) for k, v in batch.items()}
+        return {
+            k: torch.as_tensor(v, dtype=torch.float32, device=device)
+            for k, v in batch.items()
+        }
 
 
 def sac(
     env,
-    actor_critic=core.MLPActorCritic,
+    actor_critic=core.ActorCritic,
     ac_kwargs=dict(),
     dynamics_kwargs=dict(),
     seed=0,
@@ -90,6 +96,7 @@ def sac(
     alpha=0.2,
     beta=0.1,
     if_cbf=False,
+    unsafe_step=5,
     if_fixed_h=False,
     batch_size=64,
     start_steps=10,
@@ -118,7 +125,11 @@ def sac(
     act_dim = env.action_space.shape[0]
 
     # Create actor-critic module and target networks
-    ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
+    ac = actor_critic(
+        env.observation_space,
+        env.action_space,
+        **ac_kwargs
+    )
     ac_targ = deepcopy(ac)
 
     # Create neural nets for fitting dynamics
@@ -178,7 +189,9 @@ def sac(
         loss_q = loss_q1 + loss_q2
 
         # Useful info for logging
-        q_info = dict(Q1Vals=q1.detach().cpu().numpy(), Q2Vals=q2.detach().cpu().numpy())
+        q_info = dict(
+            Q1Vals=q1.detach().cpu().numpy(), Q2Vals=q2.detach().cpu().numpy()
+        )
 
         return loss_q, q_info
 
@@ -282,17 +295,29 @@ def sac(
                 p_targ.data.add_((1 - polyak) * p.data)
 
     def get_action(o, deterministic=False):
-        return ac.act(torch.as_tensor(o, dtype=torch.float32, device=device), deterministic)
+        return ac.act(
+            torch.as_tensor(o, dtype=torch.float32, device=device), deterministic
+        )
 
     def update_dynamics(data):
-        o, a, r, o2, d = data["obs"], data["act"], data["rew"], data["obs2"], data["done"]
+        o, a, r, o2, d = (
+            data["obs"],
+            data["act"],
+            data["rew"],
+            data["obs2"],
+            data["done"],
+        )
 
         index_all = [j for j in range(len(o))]
         for i in range(0, len(index_all), batch_size):
             index = index_all[i : i + batch_size]
-            # MSE loss
             o2_ = dynamics(o[index], a[index])
-            loss_dynamics = ((o2_ - o2[index]) ** 2).mean()
+            # MSE loss
+            # loss_dynamics = ((o2_ - o2[index]) ** 2).mean()
+            # LINEXP loss
+            delta = o2_ - o2[index]
+            c = -0.5
+            loss_dynamics = (torch.exp(c * delta) - c * delta - 1).mean()
             # g = dynamics.get_gx(o)
             # _, s, _ = torch.linalg.svd(g)
             # loss_dynamics += -1e-5 * (torch.abs(s[:, 0] * s[:, 1])).mean()
@@ -379,8 +404,8 @@ def sac(
             # update dynamics
             if if_cbf:
                 if not if_fixed_h:
-                    replay_buffer.label_cbf(unsafe_step=3)
-                data = replay_buffer.sample_latest(size=2e3, device=device)
+                    replay_buffer.label_cbf(unsafe_step=unsafe_step)
+                data = replay_buffer.sample_latest(size=5e2, device=device)
                 for _ in range(5):
                     update_dynamics(data=data)
                     if not if_fixed_h:
@@ -427,7 +452,8 @@ def sac(
             logger.log_tabular("LossPi", average_only=True)
             if if_cbf:
                 logger.log_tabular("LossDynamics", average_only=True)
-                logger.log_tabular("LossCBF", average_only=True)
+                if not if_fixed_h:
+                    logger.log_tabular("LossCBF", average_only=True)
             logger.log_tabular("Time", time.time() - start_time)
             logger.dump_tabular()
             updated, finished = False, False
@@ -439,15 +465,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--env", type=str, default="Pendulum-v0")
     parser.add_argument("--hid", type=int, default=128)
-    parser.add_argument("--l", type=int, default=2)
+    parser.add_argument("--l", type=int, default=1)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--beta", type=float, default=0.0)
     parser.add_argument("--alpha", type=float, default=0.2)
     parser.add_argument("--seed", "-s", type=int, default=0)
     parser.add_argument("--steps-per-epoch", type=int, default=200)
-    parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--if-cbf", action='store_true')
-    parser.add_argument("--if-fixed-h", action='store_true')
+    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--if-cbf", action="store_true")
+    parser.add_argument("--unsafe-step", type=int, default=3)
+    parser.add_argument("--if-fixed-h", action="store_true")
     parser.add_argument("--exp-name", type=str, default="sac")
     args = parser.parse_args()
 
@@ -461,17 +488,18 @@ if __name__ == "__main__":
     env = RccarGazeboEnv({"collision_reward": 10})
     sac(
         env,
-        actor_critic=core.MLPActorCritic,
+        actor_critic=core.ActorCritic,
         ac_kwargs=dict(hidden_sizes=[args.hid] * args.l),
-        dynamics_kwargs=dict(f_hidden_sizes=[512, 512], g_hidden_sizes=[512, 512]),
+        dynamics_kwargs=dict(f_hidden_sizes=[512, 512], g_hidden_sizes=[512, 512, 512]),
         gamma=args.gamma,
         seed=args.seed,
         alpha=args.alpha,
         beta=args.beta,
         if_cbf=args.if_cbf,
-        # if_cbf=True,
         if_fixed_h=args.if_fixed_h,
+        # if_cbf=True,
         # if_fixed_h=False,
+        unsafe_step=args.unsafe_step,
         steps_per_epoch=args.steps_per_epoch,
         epochs=args.epochs,
         logger_kwargs=logger_kwargs,
