@@ -5,7 +5,7 @@ import itertools
 
 env_name = "tunnel1"
 seed_list = [i for i in range(5)]
-beta = [0.0, 0.2]
+beta = [0, 0.1]
 if_fixed_h = [False, True]
 
 

@@ -44,7 +44,7 @@ def read_data(label):
                 except pd.errors.EmptyDataError:
                     continue
                 df["Algorithm"] = name_table[key]
-                df["Full_tag"] = folder
+                df["Full_tag"] = folder + "/" + sub_folder
                 df_list.append(df)
             else:
                 print("ERROR: File {} NOT FOUND!".format(sub_folder + "/progress.txt"))
@@ -90,7 +90,7 @@ def plot_timeseries(plot_df, column, label, bin_size=200, max_length=4000):
     fig, ax = plt.subplots(figsize=(7, 5))
     # plt.rcParams["font.family"] = "Helvetica"
     # ax.set_ylabel(ax.get_ylabel(), fontsize=20)
-    t_df = plot_df[plot_df["Algorithm"].str.contains("|".join(fig_order1))]
+    t_df = plot_df[plot_df["Algorithm"].isin(fig_order1)]
     g = sns.lineplot(
         x="Step",
         y=column,
@@ -110,7 +110,7 @@ def plot_timeseries(plot_df, column, label, bin_size=200, max_length=4000):
     )
     # g.set(xscale='log')
     # if "pendulum" in fprefix:
-    # ax.set_ylim((0, 500))
+    # ax.set_ylim((0, 200))
     # elif "lunar" in fprefix:
     #     ax.set_ylim((-870, 240))
 

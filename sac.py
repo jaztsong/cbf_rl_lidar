@@ -39,14 +39,19 @@ class ReplayBuffer:
         self.size = min(self.size + 1, self.max_size)
 
     def label_cbf(self, unsafe_step=3):
-        assert self.done_buf[self.ptr - 1] == 1, "Not a good time to label"
+        if self.done_buf[self.ptr - 1] != 1:
+            return
+
         ptr = self.ptr - 2
         for j in range(unsafe_step * 2):
             if not self.done_buf[ptr - j]:
+                # self.cbf_buf[ptr - j] = -unsafe_step + j
                 if j < unsafe_step:
                     self.cbf_buf[ptr - j] = -1
                 else:
                     self.cbf_buf[ptr - j] = 1
+            else:
+                break
 
     def sample_batch(self, batch_size=32, device="cpu"):
         idxs = np.random.randint(0, self.size, size=batch_size)
@@ -103,7 +108,7 @@ def sac(
     update_after=20,
     update_every=50,
     num_test_episodes=0,
-    max_ep_len=1000,
+    max_ep_len=300,
     logger_kwargs=dict(),
     save_freq=1,
 ):
@@ -249,7 +254,7 @@ def sac(
     qc_optimizer = Adam(ac.qc.parameters(), lr=lr)
     # Set up optimizers for cbf related paramaters
     dynamics_optimizer = Adam(dynamics.parameters(), lr=lr)
-    cbf_optimizer = Adam(cbf.parameters(), lr=1e-4)
+    cbf_optimizer = Adam(cbf.parameters(), lr=lr)
 
     # Set up model saving
     logger.setup_pytorch_saver(ac)
@@ -465,7 +470,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--env", type=str, default="Pendulum-v0")
     parser.add_argument("--hid", type=int, default=128)
-    parser.add_argument("--l", type=int, default=1)
+    parser.add_argument("--l", type=int, default=2)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--beta", type=float, default=0.0)
     parser.add_argument("--alpha", type=float, default=0.2)
@@ -490,7 +495,7 @@ if __name__ == "__main__":
         env,
         actor_critic=core.ActorCritic,
         ac_kwargs=dict(hidden_sizes=[args.hid] * args.l),
-        dynamics_kwargs=dict(f_hidden_sizes=[512, 512], g_hidden_sizes=[512, 512, 512]),
+        dynamics_kwargs=dict(f_hidden_sizes=[512, 512], g_hidden_sizes=[256, 256, 256]),
         gamma=args.gamma,
         seed=args.seed,
         alpha=args.alpha,

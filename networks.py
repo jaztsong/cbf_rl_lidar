@@ -101,10 +101,12 @@ class SquashedGaussianActor(nn.Module):
             logp_pi = None
 
         pi_action = torch.tanh(pi_action)
+        # print("action before shifting: {}", pi_action)
         pi_action = (
             pi_action * (self.act_limit[1] - self.act_limit[0]) / 2.0
             + (self.act_limit[1] + self.act_limit[0]) / 2.0
         )
+        # print("action after shifting: {}", pi_action)
 
         return pi_action, logp_pi
 
