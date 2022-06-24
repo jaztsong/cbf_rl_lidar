@@ -103,7 +103,7 @@ class RccarGazeboEnv(Env):
         params.setdefault("obs_shape", (36, 64, 1))
         params.setdefault("obs_scan_shape", (1081,))
         params.setdefault("steer_limits", [-0.9, 0.9])
-        params.setdefault("speed_limits", [0, 2])
+        params.setdefault("speed_limits", [0, 4])
         params.setdefault("backup_motor", -0.4)
         params.setdefault("backup_duration", 3.6)
         params.setdefault("backup_steer_range", (-0.8, 0.8))

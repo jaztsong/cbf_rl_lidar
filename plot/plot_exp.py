@@ -38,6 +38,7 @@ def read_data(label):
         key = folder.split("_")[1]
         for sub_folder in os.listdir("/".join([ROOT_DIR, folder])):
             fname = "/".join([ROOT_DIR, folder, sub_folder, "progress.txt"])
+            seed = sub_folder.split("_")[-1]
             if os.path.exists(fname):
                 try:
                     df = pd.read_csv(fname, sep="\t", header=0)
@@ -45,47 +46,49 @@ def read_data(label):
                     continue
                 df["Algorithm"] = name_table[key]
                 df["Full_tag"] = folder + "/" + sub_folder
+                df["Seed"] = seed
                 df_list.append(df)
             else:
                 print("ERROR: File {} NOT FOUND!".format(sub_folder + "/progress.txt"))
 
-    # return df_list
-    return pd.concat(df_list).reset_index()
+    return df_list
 
 
-def plot_timeseries(plot_df, column, label, bin_size=200, max_length=4000):
-    # new_df_list = []
-    # for df in df_list:
-    #     # adjust the case when reaches to max during training state
-    #     # df.loc[(df['key'].str.contains('train')) & (df['y'] == 1000), 'x'] = df[(
-    #     #     df['key'].str.contains('train')) & (df['y'] == 1000)]['x'] - 1000
-
-    #     df["xtics"] = (df["TotalEnvInteracts"] // bin_size + 1) * bin_size
-    #     df = df.groupby(["xtics"]).max().reset_index()
-    #     # cut out later data after reaches to max
-    #     # end_index = df[(df['y'] >= MAX_REWARD)].index
-    #     # if len(end_index) > 0:
-    #     #     df = df[df.index <= end_index.min()]
-
-    #     df.index = df["xtics"]
-    #     df.index.name = None
-
-    #     # max_len = min(LENGTH, df['xtics'].max())
-    #     new_df = pd.DataFrame(
-    #         index=np.linspace(0, length, int(length / bin_size) + 1), columns=df.columns
-    #     )
-    #     new_df.loc[new_df.index == 0, ["x", "xtics", "y"]] = 0
-    #     new_df["xtics"] = new_df.index
-    #     new_df.update(df)
-    #     new_df.fillna(method="ffill", inplace=True)
-    #     new_df.fillna(method="bfill", inplace=True)
-    #     new_df_list.append(new_df)
-
+def plot_timeseries(df_list, column, label, bin_size=200, max_length=4000):
+    new_df_list = []
     column_map = {"Reward": "AverageEpRet", "Safety Violation": "Coll"}
-    plot_df["xtics"] = (plot_df["TotalEnvInteracts"] // bin_size + 1) * bin_size
+    for df in df_list:
+        # adjust the case when reaches to max during training state
+        # df.loc[(df['key'].str.contains('train')) & (df['y'] == 1000), 'x'] = df[(
+        #     df['key'].str.contains('train')) & (df['y'] == 1000)]['x'] - 1000
+
+        df["xtics"] = (df["TotalEnvInteracts"] // bin_size + 1) * bin_size
+        df = df.groupby(["xtics"]).max().reset_index()
+        # cut out later data after reaches to max
+        # end_index = df[(df['y'] >= MAX_REWARD)].index
+        # if len(end_index) > 0:
+        #     df = df[df.index <= end_index.min()]
+
+        df.index = df["xtics"]
+        df.index.name = None
+
+        # max_len = min(LENGTH, df['xtics'].max())
+        new_df = pd.DataFrame(
+            index=np.linspace(0, max_length, int(max_length / bin_size) + 1),
+            columns=[column_map[column], "xtics", "Algorithm", "Seed"]
+        )
+        new_df.update(df)
+        new_df["xtics"] = new_df.index
+        new_df.fillna(method="ffill", inplace=True)
+        new_df.fillna(method="bfill", inplace=True)
+        new_df = new_df.rename(columns={column_map[column]: column, "xtics": "Step"})
+        new_df.loc[0, :] = np.NAN
+        new_df_list.append(new_df)
+
+    plot_df = pd.concat(new_df_list).reset_index()
+
+    # plot_df["xtics"] = (plot_df["TotalEnvInteracts"] // bin_size + 1) * bin_size
     # plot_df = plot_df.groupby(["xtics"]).max().reset_index()
-    plot_df = plot_df.loc[:, [column_map[column], "xtics", "Algorithm"]]
-    plot_df = plot_df.rename(columns={column_map[column]: column, "xtics": "Step"})
 
     fig, ax = plt.subplots(figsize=(7, 5))
     # plt.rcParams["font.family"] = "Helvetica"
@@ -133,6 +136,32 @@ def plot_timeseries(plot_df, column, label, bin_size=200, max_length=4000):
     plt.tight_layout()
     plt.savefig(OUT_DIR + label + "_" + column + "_algos.pdf")
 
+    for algo in fig_order1:
+        fig, ax = plt.subplots(figsize=(7, 5))
+        t_df = plot_df[plot_df["Algorithm"] == algo]
+        t_df = t_df.sort_values(by=["Seed", "Step"])
+        g = sns.lineplot(
+            x="Step",
+            y=column,
+            hue="Seed",
+            style="Seed",
+            markers=True,
+            data=t_df,
+            palette="tab10",
+            ax=ax,
+            lw=2,
+            markersize=10,
+            markeredgewidth=None,
+            markeredgecolor=None,
+        )
+        ax.legend(
+            loc="upper center",
+            ncol=2,
+            bbox_to_anchor=(0.5, -0.14),
+            markerscale=2,
+        )
+        plt.tight_layout()
+        plt.savefig(OUT_DIR + label + "_" + column + "_" + algo + ".pdf")
 
 def plot_hist(fprefix, df_list, max_step, max_reward=None):
     new_df_list = []
@@ -213,12 +242,13 @@ def plot_hist(fprefix, df_list, max_step, max_reward=None):
 
 
 if __name__ == "__main__":
-    df_list = read_data("tunnel1")
+    label = "tunnel2"
+    df_list = read_data(label)
     plot_timeseries(
-        df_list, column="Reward", label="tunnel1"
+        df_list, column="Reward", label=label
     )
     plot_timeseries(
-        df_list, column="Safety Violation", label="tunnel1"
+        df_list, column="Safety Violation", label=label
     )
     # plot_hist("./exp_data/pendulum", df_list, 1000)
 

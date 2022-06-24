@@ -254,7 +254,7 @@ def sac(
     qc_optimizer = Adam(ac.qc.parameters(), lr=lr)
     # Set up optimizers for cbf related paramaters
     dynamics_optimizer = Adam(dynamics.parameters(), lr=lr)
-    cbf_optimizer = Adam(cbf.parameters(), lr=lr)
+    cbf_optimizer = Adam(cbf.parameters(), lr=1e-4)
 
     # Set up model saving
     logger.setup_pytorch_saver(ac)
@@ -350,6 +350,7 @@ def sac(
 
             # Record things
             logger.store(LossCBF=loss_cbf.item())
+            updated_cbf = True
 
     def test_agent():
         for j in range(num_test_episodes):
@@ -367,7 +368,7 @@ def sac(
     o, ep_ret, ep_len = env.reset(), 0, 0
     n_coll = 0
 
-    updated, finished = False, False
+    updated, updated_cbf, finished = False, False, False
     # Main loop: collect experience in env and update/log each epoch
     for t in tqdm(range(total_steps)):
 
@@ -408,12 +409,12 @@ def sac(
             n_coll += d
             # update dynamics
             if if_cbf:
-                if not if_fixed_h:
+                if not if_fixed_h and d:
                     replay_buffer.label_cbf(unsafe_step=unsafe_step)
-                data = replay_buffer.sample_latest(size=5e2, device=device)
+                data = replay_buffer.sample_latest(size=1e3, device=device)
                 for _ in range(5):
                     update_dynamics(data=data)
-                    if not if_fixed_h:
+                    if not if_fixed_h and d:
                         update_cbf(data=data)
 
                 # test_data = replay_buffer.sample_batch(1, device=device)
@@ -457,11 +458,11 @@ def sac(
             logger.log_tabular("LossPi", average_only=True)
             if if_cbf:
                 logger.log_tabular("LossDynamics", average_only=True)
-                if not if_fixed_h:
+                if not if_fixed_h and updated_cbf:
                     logger.log_tabular("LossCBF", average_only=True)
             logger.log_tabular("Time", time.time() - start_time)
             logger.dump_tabular()
-            updated, finished = False, False
+            updated, updated_cbf, finished = False, False, False
 
 
 if __name__ == "__main__":
@@ -478,7 +479,7 @@ if __name__ == "__main__":
     parser.add_argument("--steps-per-epoch", type=int, default=200)
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--if-cbf", action="store_true")
-    parser.add_argument("--unsafe-step", type=int, default=3)
+    parser.add_argument("--unsafe-step", type=int, default=4)
     parser.add_argument("--if-fixed-h", action="store_true")
     parser.add_argument("--exp-name", type=str, default="sac")
     args = parser.parse_args()

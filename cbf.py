@@ -36,20 +36,20 @@ class CBF(nn.Module):
         u_filtered = None
         try:
             u_filtered = solve_qp(P, q, G, h, lb=lb, ub=ub, solver="cvxopt")
-            if not np.isclose(np.mean(u_filtered - u_rl), 0, atol=1e-3):
-                print(
-                    "CBF tweaking: h(x) = {} new_h(x) = {}".format(
-                        (np.dot(P_h, obs) + Q_h),
-                        (np.dot(P_h, f + np.dot(g, u_filtered)) + Q_h),
-                    )
-                )
-                print("(cbf): action diff: {}".format(u_filtered - u_rl))
-                # print('.', end='')
+            # if not np.isclose(np.mean(u_filtered - u_rl), 0, atol=1e-3):
+            #     print(
+            #         "CBF tweaking: h(x) = {} new_h(x) = {}".format(
+            #             (np.dot(P_h, obs) + Q_h),
+            #             (np.dot(P_h, f + np.dot(g, u_filtered)) + Q_h),
+            #         )
+            #     )
+            #     print("(cbf): action diff: {}".format(u_filtered - u_rl))
         except:
-            print("CBF failed: h(x) = {}".format((np.dot(P_h, obs) + Q_h)))
+            # print("CBF failed: h(x) = {}".format((np.dot(P_h, obs) + Q_h)))
+            pass
         
         if u_filtered is not None and u_filtered[1] < 1e-2:
             u_filtered = None
-            print("CBF failed: freezing solution")
+            # print("CBF failed: freezing solution")
 
         return u_filtered if u_filtered is not None else u_rl
