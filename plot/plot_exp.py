@@ -104,6 +104,7 @@ def plot_timeseries(df_list, column, label, bin_size=200, max_length=4000):
         style_order=fig_order1,
         hue_order=fig_order1,
         palette="tab10",
+        ci=80,
         ax=ax,
         lw=2,
         markersize=10,
@@ -134,7 +135,7 @@ def plot_timeseries(df_list, column, label, bin_size=200, max_length=4000):
         markerscale=2,
     )
     plt.tight_layout()
-    plt.savefig(OUT_DIR + label + "_" + column + "_algos.pdf")
+    plt.savefig(OUT_DIR + label + "_" + column + "_ALL.pdf")
 
     for algo in fig_order1:
         fig, ax = plt.subplots(figsize=(7, 5))
@@ -242,7 +243,7 @@ def plot_hist(fprefix, df_list, max_step, max_reward=None):
 
 
 if __name__ == "__main__":
-    label = "tunnel2"
+    label = "tunnel1"
     df_list = read_data(label)
     plot_timeseries(
         df_list, column="Reward", label=label

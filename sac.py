@@ -254,7 +254,7 @@ def sac(
     qc_optimizer = Adam(ac.qc.parameters(), lr=lr)
     # Set up optimizers for cbf related paramaters
     dynamics_optimizer = Adam(dynamics.parameters(), lr=lr)
-    cbf_optimizer = Adam(cbf.parameters(), lr=1e-4)
+    cbf_optimizer = Adam(cbf.parameters(), lr=2e-4)
 
     # Set up model saving
     logger.setup_pytorch_saver(ac)
@@ -479,7 +479,7 @@ if __name__ == "__main__":
     parser.add_argument("--steps-per-epoch", type=int, default=200)
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--if-cbf", action="store_true")
-    parser.add_argument("--unsafe-step", type=int, default=4)
+    parser.add_argument("--unsafe-step", type=int, default=1)
     parser.add_argument("--if-fixed-h", action="store_true")
     parser.add_argument("--exp-name", type=str, default="sac")
     args = parser.parse_args()

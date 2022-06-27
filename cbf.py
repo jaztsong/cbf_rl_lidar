@@ -48,7 +48,7 @@ class CBF(nn.Module):
             # print("CBF failed: h(x) = {}".format((np.dot(P_h, obs) + Q_h)))
             pass
         
-        if u_filtered is not None and u_filtered[1] < 1e-2:
+        if u_filtered is not None and u_filtered[1] < 5e-2:
             u_filtered = None
             # print("CBF failed: freezing solution")
 
