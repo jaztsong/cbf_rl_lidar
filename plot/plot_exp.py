@@ -1,8 +1,9 @@
 from matplotlib import pyplot as plt
+from pyrsistent import b
 import seaborn as sns
 import pandas as pd
 import numpy as np
-import os
+import os, sys
 
 sns.set_theme(style="darkgrid")
 ROOT_DIR = "/home/song3/Research/cbf_rl_lidar/data"
@@ -13,12 +14,13 @@ MAX_REWARD = 190
 name_table = {
     "sac": "SAC",
     "lagrangian-sac": "Lagrangian SAC",
-    "adaptive-h": "CBF SAC (Adaptive)",
-    "fixed-h": "CBF SAC (Fixed)",
+    "adaptive-h": "SAC + Online CBF (Ours)",
+    "fixed-h": "SAC + Offline CBF",
 }
 
-fig_order1 = ["SAC", "Lagrangian SAC", "CBF SAC (Fixed)", "CBF SAC (Adaptive)"]
-order2 = ["Vanilla Fitted LQR", "Vanilla Deep Koopman", "Fitted LQR w/ GMM", "Ours"]
+fig_order1 = ["SAC", "Lagrangian SAC", "SAC + Offline CBF", "SAC + Online CBF (Ours)"]
+order2 = ["Vanilla Fitted LQR", "Vanilla Deep Koopman",
+          "Fitted LQR w/ GMM", "Ours"]
 order_hist = [
     "DDPG",
     "SAC",
@@ -49,14 +51,15 @@ def read_data(label):
                 df["Seed"] = seed
                 df_list.append(df)
             else:
-                print("ERROR: File {} NOT FOUND!".format(sub_folder + "/progress.txt"))
+                print("ERROR: File {} NOT FOUND!".format(
+                    sub_folder + "/progress.txt"))
 
     return df_list
 
 
 def plot_timeseries(df_list, column, label, bin_size=200, max_length=4000):
     new_df_list = []
-    column_map = {"Reward": "AverageEpRet", "Safety Violation": "Coll"}
+    column_map = {"Reward": "AverageEpRet", "Collision": "Coll"}
     for df in df_list:
         # adjust the case when reaches to max during training state
         # df.loc[(df['key'].str.contains('train')) & (df['y'] == 1000), 'x'] = df[(
@@ -81,8 +84,10 @@ def plot_timeseries(df_list, column, label, bin_size=200, max_length=4000):
         new_df["xtics"] = new_df.index
         new_df.fillna(method="ffill", inplace=True)
         new_df.fillna(method="bfill", inplace=True)
-        new_df = new_df.rename(columns={column_map[column]: column, "xtics": "Step"})
+        new_df = new_df.rename(
+            columns={column_map[column]: column, "xtics": "Step"})
         new_df.loc[0, :] = np.NAN
+        new_df.loc[:, [column]] = new_df[column].rolling(3).mean()
         new_df_list.append(new_df)
 
     plot_df = pd.concat(new_df_list).reset_index()
@@ -122,7 +127,8 @@ def plot_timeseries(df_list, column, label, bin_size=200, max_length=4000):
     handles, labels = ax.get_legend_handles_labels()
     new_order = []
     for i in range(len(fig_order1)):
-        f_indexes = [j for j, elem in enumerate(labels) if fig_order1[i] in elem]
+        f_indexes = [j for j, elem in enumerate(
+            labels) if fig_order1[i] in elem]
         if len(f_indexes) > 0:
             new_order.append(f_indexes[0])
 
@@ -135,7 +141,7 @@ def plot_timeseries(df_list, column, label, bin_size=200, max_length=4000):
         markerscale=2,
     )
     plt.tight_layout()
-    plt.savefig(OUT_DIR + label + "_" + column + "_ALL.pdf")
+    plt.savefig(OUT_DIR + label + "_" + "-".join(column.split(" ")) + "_ALL.pdf")
 
     for algo in fig_order1:
         fig, ax = plt.subplots(figsize=(7, 5))
@@ -162,7 +168,8 @@ def plot_timeseries(df_list, column, label, bin_size=200, max_length=4000):
             markerscale=2,
         )
         plt.tight_layout()
-        plt.savefig(OUT_DIR + label + "_" + column + "_" + algo + ".pdf")
+        plt.savefig(OUT_DIR + label + "_" + "-".join(column.split(" ")) + "_" + algo + ".pdf")
+
 
 def plot_hist(fprefix, df_list, max_step, max_reward=None):
     new_df_list = []
@@ -172,7 +179,7 @@ def plot_hist(fprefix, df_list, max_step, max_reward=None):
             df = df.iloc[0:1]
         else:
             df = df[(df.key.str.endswith("test/rew")) & (df.x <= max_step)]
-            df = df.iloc[(len(df) - 1) :]
+            df = df.iloc[(len(df) - 1):]
 
         new_df_list.append(df)
 
@@ -242,17 +249,116 @@ def plot_hist(fprefix, df_list, max_step, max_reward=None):
     plt.savefig(fprefix + "_hist_algo.pdf")
 
 
-if __name__ == "__main__":
-    label = "tunnel1"
-    df_list = read_data(label)
-    plot_timeseries(
-        df_list, column="Reward", label=label
-    )
-    plot_timeseries(
-        df_list, column="Safety Violation", label=label
-    )
-    # plot_hist("./exp_data/pendulum", df_list, 1000)
+def plot_cbf_param(label, seed):
+    import torch
+    sys.path.insert(1, '/home/song3/Research/cbf_rl_lidar')
+    # from cbf import CBF
 
+    exp_name = label + "_adaptive-h"
+    model = torch.load(ROOT_DIR + "/" +  exp_name + "/" + exp_name + "_s" + str(seed) + "/pyt_save/model.pt")
+    fig, ax = plt.subplots(figsize=(4, 4))
+    param = model.P.detach().cpu().numpy().squeeze()
+    angle_range = 2.3561944902
+    angles = [rad * 180.0 / np.pi for rad in np.linspace(-angle_range, angle_range, len(param))]
+    hand_craft = np.ones_like(param) * -1.0 / len(param)
+    binsize = 2 * angle_range / len(param) * 80
+    df_0 = pd.DataFrame({"angle": angles, "P": param, "Algorithm": "Online Learning CBF"})
+    df_0["xtics"] = df_0["angle"] // binsize * binsize
+    df_1 = pd.DataFrame({"angle": angles, "P": hand_craft, "Algorithm": "Hand-Crafted CBF"})
+    df_1["xtics"] = df_1["angle"] // binsize * binsize
+    plot_df = pd.concat([df_0, df_1]).reset_index()
+
+    g = sns.lineplot(
+        x="xtics",
+        y="P",
+        hue="Algorithm",
+        style="Algorithm",
+        # markers=True,
+        data=plot_df,
+        palette="tab10",
+        ax=ax,
+        lw=3,
+        # markersize=5,
+        # markevery=int(1081 / 20),
+        markeredgewidth=None,
+        markeredgecolor=None,
+    )
+    ax.set_xlabel(r"Scan Angle ($^o$)")
+    ax.set_ylabel(r"Weight of $P$ in CBF")
+    ax.set_ylim([-0.023, 0.002])
+    ax.ticklabel_format(axis='y', style='sci', scilimits=(0,0))
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(OUT_DIR + label + "_s" + str(seed) + "_cbf-param.pdf")
+
+def plot_cbf_effect(label, seed):
+    exp_name = label + "_adaptive-h"
+    filename = ROOT_DIR + "/" +  exp_name + "/" + exp_name + "_s" + str(seed) + "/replaybuffer.npy"
+    try:
+        data = np.load(filename, allow_pickle=True)
+    except FileNotFoundError:
+        print("No such file: {}".format(filename))
+        return
+    fig, ax = plt.subplots(figsize=(7, 3.5))
+    ax2 = ax.twinx()
+    a_rl = data[()]['act_rl'][:4000]
+    a = data[()]['act'][:4000]
+    binsize = 20
+    df_0 = pd.DataFrame({"Step": range(len(a)), "Angle": (a - a_rl)[:, 0] * 180.0 / np.pi})
+    df_0["xtics"] = df_0["Step"] // binsize * binsize
+    df_1 = pd.DataFrame({"Step": range(len(a)), "Velocity": (a - a_rl)[:, 1]})
+    df_1["xtics"] = df_1["Step"] // binsize * binsize
+
+    g = sns.lineplot(
+        x="xtics",
+        y="Angle",
+        data=df_0,
+        ax=ax,
+        lw=2,
+        label="Angle",
+        # markevery=int(1081 / 20),
+    )
+    ax.legend(loc='upper left')
+    g = sns.lineplot(
+        x="xtics",
+        y="Velocity",
+        markers=True,
+        data=df_1,
+        palette="tab10",
+        ax=ax2,
+        lw=2,
+        label="Velocity",
+        color='r',
+        # markevery=int(1081 / 20),
+
+    )
+    ax.set_xlabel(r"Step")
+    ax.set_ylabel(r"Steering Angle Adjusted by CBF ($^o$)")
+    ax2.set_ylabel(r"Velocity Adjusted by CBF ($m/s$)")
+    ax.set_ylim([-100, 100])
+    ax2.set_ylim([-4, 4])
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(OUT_DIR + label + "_s" + str(seed) + "_cbf-effect.pdf")
+
+
+if __name__ == "__main__":
+    # plot_cbf_effect("tunnel1", 2)
+    # plot_cbf_effect("tunnel2", 1235)
+
+    plot_cbf_param("tunnel1", 1237)
+    plot_cbf_param("tunnel2", 2)
+
+    # for label in ["tunnel1", "tunnel2"]:
+    #     df_list = read_data(label)
+    #     plot_timeseries(
+    #         df_list, column="Reward", label=label
+    #     )
+    #     plot_timeseries(
+    #         df_list, column="Collision", label=label
+    #     )
+
+    # plot_hist("./exp_data/pendulum", df_list, 1000)
     # df_list = read_data("./exp_data/lunarLander")
     # plot_timeseries('./exp_data/lunarLander', df_list, 100, 10000)
     # plot_hist("./exp_data/lunarLander", df_list, 3000)

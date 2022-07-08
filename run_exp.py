@@ -2,11 +2,12 @@
 import subprocess
 import time
 
-base_name = "tunnel1"
-seed_list = [1236, 1237, 1238]  # , 
-beta = [0, 0.2]
+base_name = "tunnel2"
+seed_list = [1235]  # , 
+# beta = [0, 0.2]
+beta = []
 # if_fixed_h = [False, True]
-if_fixed_h = []
+if_fixed_h = [False]
 
 
 def run_ros_job(cmd):

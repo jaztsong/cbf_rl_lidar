@@ -22,16 +22,18 @@ class ReplayBuffer:
         self.obs_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
         self.obs2_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
         self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
+        self.act_rl_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
         self.rew_buf = np.zeros(size, dtype=np.float32)
         self.cost_buf = np.zeros(size, dtype=np.float32)
         self.done_buf = np.zeros(size, dtype=np.float32)
         self.cbf_buf = np.zeros(size, dtype=np.float32)
         self.ptr, self.size, self.max_size = 0, 0, size
 
-    def store(self, obs, act, rew, next_obs, done, cost):
+    def store(self, obs, act, rew, next_obs, done, cost, act_rl):
         self.obs_buf[self.ptr] = obs
         self.obs2_buf[self.ptr] = next_obs
         self.act_buf[self.ptr] = act
+        self.act_rl_buf[self.ptr] = act_rl
         self.rew_buf[self.ptr] = rew
         self.cost_buf[self.ptr] = cost
         self.done_buf[self.ptr] = done
@@ -64,10 +66,7 @@ class ReplayBuffer:
             cbf=self.cbf_buf[idxs],
             done=self.done_buf[idxs],
         )
-        return {
-            k: torch.as_tensor(v, dtype=torch.float32, device=device)
-            for k, v in batch.items()
-        }
+        return {k: torch.as_tensor(v, dtype=torch.float32, device=device) for k, v in batch.items()}
 
     def sample_latest(self, size=1e3, device="cpu"):
         idxs = range(int(max(self.ptr - size, 0)), self.ptr)
@@ -80,10 +79,15 @@ class ReplayBuffer:
             cbf=self.cbf_buf[idxs],
             done=self.done_buf[idxs],
         )
-        return {
-            k: torch.as_tensor(v, dtype=torch.float32, device=device)
-            for k, v in batch.items()
-        }
+        return {k: torch.as_tensor(v, dtype=torch.float32, device=device) for k, v in batch.items()}
+
+    def save2file(self, filename):
+        data = dict(
+            act=self.act_buf,
+            act_rl=self.act_rl_buf,
+        )
+        np.save(filename, data)
+        return
 
 
 def sac(
@@ -130,11 +134,7 @@ def sac(
     act_dim = env.action_space.shape[0]
 
     # Create actor-critic module and target networks
-    ac = actor_critic(
-        env.observation_space,
-        env.action_space,
-        **ac_kwargs
-    )
+    ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
     ac_targ = deepcopy(ac)
 
     # Create neural nets for fitting dynamics
@@ -194,9 +194,7 @@ def sac(
         loss_q = loss_q1 + loss_q2
 
         # Useful info for logging
-        q_info = dict(
-            Q1Vals=q1.detach().cpu().numpy(), Q2Vals=q2.detach().cpu().numpy()
-        )
+        q_info = dict(Q1Vals=q1.detach().cpu().numpy(), Q2Vals=q2.detach().cpu().numpy())
 
         return loss_q, q_info
 
@@ -257,7 +255,7 @@ def sac(
     cbf_optimizer = Adam(cbf.parameters(), lr=2e-4)
 
     # Set up model saving
-    logger.setup_pytorch_saver(ac)
+    logger.setup_pytorch_saver(cbf)
 
     def update(data):
         # First run one gradient descent step for Q1 and Q2
@@ -300,9 +298,7 @@ def sac(
                 p_targ.data.add_((1 - polyak) * p.data)
 
     def get_action(o, deterministic=False):
-        return ac.act(
-            torch.as_tensor(o, dtype=torch.float32, device=device), deterministic
-        )
+        return ac.act(torch.as_tensor(o, dtype=torch.float32, device=device), deterministic)
 
     def update_dynamics(data):
         o, a, r, o2, d = (
@@ -315,7 +311,7 @@ def sac(
 
         index_all = [j for j in range(len(o))]
         for i in range(0, len(index_all), batch_size):
-            index = index_all[i : i + batch_size]
+            index = index_all[i: i + batch_size]
             o2_ = dynamics(o[index], a[index])
             # MSE loss
             # loss_dynamics = ((o2_ - o2[index]) ** 2).mean()
@@ -339,7 +335,7 @@ def sac(
 
         index_all = [j for j in range(len(o)) if h[j] != 0]
         for i in range(0, len(index_all), batch_size):
-            index = index_all[i : i + batch_size]
+            index = index_all[i: i + batch_size]
             # MSE loss
             h_ = cbf.h(o[index])
             loss_cbf = ((h_ - h[index]) ** 2).mean()
@@ -347,6 +343,7 @@ def sac(
             cbf_optimizer.zero_grad()
             loss_cbf.backward()
             cbf_optimizer.step()
+            cbf.P.data.clamp_(-10.0, 0.0)
 
             # Record things
             logger.store(LossCBF=loss_cbf.item())
@@ -376,12 +373,14 @@ def sac(
         # from a uniform distribution for better exploration. Afterwards,
         # use the learned policy.
         if t > start_steps:
-            a = get_action(o)
+            a_rl = get_action(o)
+            a = a_rl
             if updated and if_cbf:
                 f, g = dynamics.get_dynamics(o, device=device)
                 a = cbf.control_barrier(o, a, f, g)
         else:
             a = env.action_space.sample()
+            a_rl = a
 
         # Step the env
         o2, r, d, info = env.step(a)
@@ -395,7 +394,7 @@ def sac(
         d = False if ep_len == max_ep_len else d
 
         # Store experience to replay buffer
-        replay_buffer.store(o, a, r, o2, d, c)
+        replay_buffer.store(o, a, r, o2, d, c, a_rl)
 
         # Super critical, easy to overlook step: make sure to update
         # most recent observation!
@@ -440,6 +439,7 @@ def sac(
             # Save model
             if (epoch % save_freq == 0) or (epoch == epochs):
                 logger.save_state({"env": env}, None)
+                replay_buffer.save2file(logger.output_dir + "/" + "replaybuffer")
 
             # Test the performance of the deterministic version of the agent.
             # test_agent()
@@ -465,6 +465,7 @@ def sac(
             updated, updated_cbf, finished = False, False, False
 
 
+
 if __name__ == "__main__":
     import argparse
 
@@ -481,7 +482,7 @@ if __name__ == "__main__":
     parser.add_argument("--if-cbf", action="store_true")
     parser.add_argument("--unsafe-step", type=int, default=1)
     parser.add_argument("--if-fixed-h", action="store_true")
-    parser.add_argument("--exp-name", type=str, default="sac")
+    parser.add_argument("--exp-name", type=str, default="test")
     args = parser.parse_args()
 
     from utils.logx import setup_logger_kwargs
